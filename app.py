@@ -232,15 +232,14 @@ def api_set_default():
     if ext == '.mp4':
         return jsonify({'ok': False, 'error': 'MP4 not supported, normalize first to convert to MKV'})
     
-    # Use mkvpropedit to set default flag
     tracks, _ = get_file_info(filepath)
     cmd = ['mkvpropedit', filepath]
     for i, t in enumerate(tracks):
-        track_num = i + 2  # 1=video, 2+=audio in mkvpropedit
+        track_sel = 'track:a' + str(i + 1)
         if t['index'] == track_index:
-            cmd += ['--edit', 'track:' + str(track_num), '--set', 'flag-default=1']
+            cmd += ['--edit', track_sel, '--set', 'flag-default=1']
         else:
-            cmd += ['--edit', 'track:' + str(track_num), '--set', 'flag-default=0']
+            cmd += ['--edit', track_sel, '--set', 'flag-default=0']
     
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
