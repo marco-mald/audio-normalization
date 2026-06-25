@@ -178,18 +178,20 @@ function renderFiles(files) {
   var html = '';
   for (var i = 0; i < files.length; i++) {
     var f = files[i];
+    var defaultCount = f.tracks.filter(function(t) { return t.is_default; }).length;
     var tracks = '';
     for (var j = 0; j < f.tracks.length; j++) {
       var t = f.tracks[j];
+      var showSetDefault = !t.is_default || defaultCount > 1;
       tracks += '<div class="track-item">' +
         '<span class="ti">' + t.index + '</span>' +
         '<span class="tc">' + t.codec + '</span>' +
         '<span class="tch">' + t.channels + 'ch</span>' +
         '<span class="tl">' + t.lang + '</span>' +
         '<span class="tt">' + (t.title || '—') + '</span>' +
-        (t.is_default
-          ? '<span class="tdef">DEFAULT</span>'
-          : '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();setDefault(\'' + f.id + '\',' + t.index + ')">Set default</button>') +
+        (showSetDefault
+          ? '<button class="btn btn-sm" style="font-size:10px;padding:2px 6px" onclick="event.stopPropagation();setDefault(\'' + f.id + '\',' + t.index + ')">Set default</button>'
+          : '<span class="tdef">DEFAULT</span>') +
         '<button class="btn btn-sm" style="font-size:10px;padding:2px 5px;color:#7a3a3a;border-color:#2a1414" onclick="event.stopPropagation();deleteTrack(\'' + f.id + '\',' + t.index + ')" title="Eliminar pista">✕</button>' +
         '</div>';
     }
