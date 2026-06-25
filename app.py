@@ -377,4 +377,4 @@ def api_sysinfo():
 
 if __name__ == '__main__':
     print('Media Manager -> http://localhost:5000')
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False, use_reloader=True)
