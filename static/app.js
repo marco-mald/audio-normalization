@@ -52,8 +52,35 @@ function showToast(message, type) {
   }, 4500);
 }
 
+function playBeep(isError) {
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.frequency.value = isError ? 300 : 880;
+    gain.gain.value = 0.3;
+    osc.start();
+    osc.stop(ctx.currentTime + (isError ? 0.3 : 0.15));
+    if (!isError) {
+      setTimeout(function() {
+        var osc2 = ctx.createOscillator();
+        var gain2 = ctx.createGain();
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.frequency.value = 1100;
+        gain2.gain.value = 0.3;
+        osc2.start();
+        osc2.stop(ctx.currentTime + 0.15);
+      }, 150);
+    }
+  } catch(e) {}
+}
+
 function notify(title, body, isError) {
   showToast(title + (body ? ': ' + body : ''), isError ? 'err' : 'ok');
+  playBeep(isError);
   if ('Notification' in window && Notification.permission === 'granted') {
     new Notification(title, { body: body });
   }
