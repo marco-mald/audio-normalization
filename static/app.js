@@ -253,9 +253,7 @@ function renderFiles(files) {
         '<button class="btn btn-sm" style="font-size:10px;padding:2px 5px;color:#7a3a3a;border-color:#2a1414" onclick="event.stopPropagation();deleteTrack(\'' + f.id + '\',' + t.index + ')" title="Eliminar pista">✕</button>' +
         '</div>';
     }
-    var normBtn = f.status !== '4k'
-      ? '<button class="btn btn-sm ' + (f.status !== 'ok' ? 'btn-green' : '') + '" onclick="event.stopPropagation();doNormalize(\'' + f.id + '\')">Normalize</button>'
-      : '';
+    var normBtn = '<button class="btn btn-sm ' + (f.status !== 'ok' && f.status !== '4k' ? 'btn-green' : '') + '" onclick="event.stopPropagation();doNormalize(\'' + f.id + '\')">Normalize</button>';
     var isSelected = !!selected[f.id];
     html += '<div class="file-row' + (isSelected ? ' selected' : '') + '" id="row-' + f.id + '">' +
       '<div class="file-header" onclick="togglePanel(\'' + f.id + '\')">' +
@@ -275,7 +273,7 @@ function renderFiles(files) {
       '<div class="panel" id="panel-' + f.id + '">' +
         '<div class="track-list">' + tracks + '</div>' +
         '<div class="actions">' +
-          (f.status !== '4k' ? '<button class="btn btn-sm btn-green" onclick="doNormalize(\'' + f.id + '\')">Normalize (AAC 2.0 first)</button>' : '') +
+          '<button class="btn btn-sm ' + (f.status !== 'ok' && f.status !== '4k' ? 'btn-green' : '') + '" onclick="doNormalize(\'' + f.id + '\')">Normalize (AAC 2.0 first)</button>' +
           '<button class="btn btn-sm" onclick="doRefresh(\'' + f.id + '\')">Refresh</button>' +
         '</div>' +
         '<div class="log" id="log-' + f.id + '"></div>' +
