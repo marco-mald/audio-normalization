@@ -383,11 +383,15 @@ def clean_filename(name):
     name = re.sub(r'\s+', ' ', name).strip()
     return name
 
+poster_cache = {}
+
 @app.route('/api/poster')
 def api_poster():
     q = request.args.get('q', '').strip()
     if not q or not TMDB_API_KEY:
         return jsonify({'poster': None})
+    if q in poster_cache:
+        return jsonify({'poster': poster_cache[q]})
     try:
         url = 'https://api.themoviedb.org/3/search/multi?api_key=' + TMDB_API_KEY + '&query=' + urllib.parse.quote(q) + '&page=1'
         req = urllib.request.Request(url, headers={'User-Agent': 'MediaManager/1.0'})
@@ -397,10 +401,25 @@ def api_poster():
         if results:
             poster_path = results[0].get('poster_path')
             if poster_path:
-                return jsonify({'poster': 'https://image.tmdb.org/t/p/w92' + poster_path})
+                poster_cache[q] = '/api/img/' + poster_path.lstrip('/')
+                return jsonify({'poster': poster_cache[q]})
+        poster_cache[q] = None
         return jsonify({'poster': None})
     except:
         return jsonify({'poster': None})
+
+@app.route('/api/img/<path:path>')
+def api_img(path):
+    try:
+        url = 'https://image.tmdb.org/t/p/w185/' + path
+        req = urllib.request.Request(url, headers={'User-Agent': 'MediaManager/1.0'})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            img_data = resp.read()
+            content_type = resp.headers.get('Content-Type', 'image/jpeg')
+        from flask import Response
+        return Response(img_data, content_type=content_type, headers={'Cache-Control': 'public, max-age=604800'})
+    except:
+        return '', 404
 
 if __name__ == '__main__':
     print('Media Manager -> http://localhost:5000')
