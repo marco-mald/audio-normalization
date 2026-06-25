@@ -45,9 +45,13 @@ def get_file_info(filepath):
 def classify(tracks, height):
     if height >= 1440: return '4k'
     if not tracks: return 'error'
-    f = tracks[0]
-    if f['codec'] == 'aac' and f['channels'] <= 2: return 'ok'
-    if any(t['codec'] == 'aac' and t['channels'] <= 2 for t in tracks): return 'needs-fix'
+    defaults = [t for t in tracks if t['is_default']]
+    if not defaults:
+        defaults = tracks[:1]
+    if any(t['codec'] == 'aac' and t['channels'] <= 2 for t in defaults):
+        return 'ok'
+    if any(t['codec'] == 'aac' and t['channels'] <= 2 for t in tracks):
+        return 'needs-fix'
     return 'no-aac'
 
 def scan_library_async():

@@ -69,8 +69,8 @@ input[type=checkbox]{accent-color:#4a6a9a;width:13px;height:13px}
 .toast-ok{background:#0d1a0d;border-color:#1a3a1a;color:#5a9a5a}
 .toast-err{background:#1a0d0d;border-color:#3a1a1a;color:#9a4a4a}
 .toast-info{background:#0d0d1a;border-color:#1a1a3a;color:#5a5a9a}
-#cpu-widget{position:fixed;bottom:20px;left:20px;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:4px;padding:8px 10px;z-index:100;width:164px;font-size:11px}
-#cpu-canvas{display:block;margin-top:5px;border-radius:2px}
+#cpu-widget{position:fixed;bottom:20px;left:20px;background:#0a0a0a;border:1px solid #1a1a1a;border-radius:6px;padding:12px 14px;z-index:100;width:220px;font-size:12px}
+#cpu-canvas{display:block;margin-top:6px;border-radius:3px}
 @media(max-width:640px){
   header{padding:10px 12px;flex-wrap:wrap;gap:8px}
   .toolbar{padding:8px 12px;flex-wrap:wrap;gap:6px}
@@ -108,14 +108,14 @@ input[type=checkbox]{accent-color:#4a6a9a;width:13px;height:13px}
     <span id="cpu-pct" style="color:#4a8a4a;font-size:13px;font-weight:600">—</span>
     <span id="cpu-jobs" style="color:#333">—</span>
   </div>
-  <canvas id="cpu-canvas" width="144" height="36"></canvas>
+  <canvas id="cpu-canvas" width="192" height="52"></canvas>
   <div style="display:flex;justify-content:space-between;margin-top:3px;color:#2a2a2a;font-size:10px">
     <span>80%</span><span>50%</span><span id="cpu-cores"></span>
   </div>
 </div>
 <header>
   <h1>🎬 MEDIA MANAGER</h1>
-  <span class="badge">v1.1.1</span>
+  <span class="badge">v1.2.0</span>
   <span class="badge" id="b-total">—</span>
   <span class="badge" id="b-issues">—</span>
   <div style="flex:1"></div>
@@ -140,6 +140,6 @@ input[type=checkbox]{accent-color:#4a6a9a;width:13px;height:13px}
 </div>
 <div class="stats" id="stats"></div>
 <div class="grid" id="grid"><div class="loading">Click Scan library to start</div></div>
-<script src="/static/app.js?v=1.1.1"></script>
+<script src="/static/app.js?v=1.2.0"></script>
 </body>
 </html>
