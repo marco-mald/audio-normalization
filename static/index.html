@@ -51,14 +51,16 @@ select{background:#111;border:1px solid #222;color:#888;padding:5px 8px;border-r
 .log.open{display:block}
 .lok{color:#4a8a4a}
 .lerr{color:#8a3a3a}
+.thumb{width:32px;height:46px;object-fit:cover;border-radius:3px;background:#1a1a1a;flex-shrink:0}
+.thumb[src=""]{display:none}
 .loading{color:#333;font-size:12px;padding:32px;text-align:center}
 .progress-wrap{display:flex;align-items:center;gap:6px}
 .progress-bar{width:80px;height:4px;background:#1a1a1a;border-radius:2px;overflow:hidden}
 .progress-fill{height:100%;width:0%;background:#2a6a2a;border-radius:2px;transition:width .4s}
 .prog-text{font-size:10px;color:#666;white-space:nowrap;min-width:60px}
 input[type=checkbox]{accent-color:#4a6a9a;width:13px;height:13px}
-#scan-bar{position:fixed;top:0;left:0;right:0;height:2px;z-index:200;overflow:hidden;pointer-events:none}
-#scan-bar-fill{height:100%;width:0%;background:#4a8a4a;transition:width .3s}
+#scan-bar{position:fixed;top:0;left:0;right:0;height:6px;z-index:200;overflow:hidden;pointer-events:none;background:#111}
+#scan-bar-fill{height:100%;width:0%;background:#4a8a4a;transition:width .3s;border-radius:0 3px 3px 0}
 #scan-bar.active #scan-bar-fill{animation:scan-slide 1.4s infinite ease-in-out}
 @keyframes scan-slide{0%{width:0%;margin-left:0%}50%{width:55%;margin-left:22%}100%{width:0%;margin-left:100%}}
 #toasts{position:fixed;bottom:20px;right:20px;z-index:9999;display:flex;flex-direction:column;gap:8px;pointer-events:none;align-items:flex-end}
@@ -113,7 +115,7 @@ input[type=checkbox]{accent-color:#4a6a9a;width:13px;height:13px}
 </div>
 <header>
   <h1>🎬 MEDIA MANAGER</h1>
-  <span class="badge">v1.0.0</span>
+  <span class="badge">v1.1.0</span>
   <span class="badge" id="b-total">—</span>
   <span class="badge" id="b-issues">—</span>
   <div style="flex:1"></div>

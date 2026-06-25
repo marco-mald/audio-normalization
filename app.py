@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 from flask import Flask, jsonify, request, send_from_directory
-import subprocess, json, os, glob, threading, time
+import subprocess, json, os, glob, threading, time, urllib.request, urllib.parse, re
 
 app = Flask(__name__, static_folder='static')
 
 MEDIA_DIR = "/mnt/ADATA"
+TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '')
 FFPROBE = "/usr/lib/jellyfin-ffmpeg/ffprobe"
 FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
 
@@ -373,6 +374,33 @@ def api_sysinfo():
         pass
     active = sum(1 for j in jobs.values() if not j.get('done'))
     return jsonify({'cpu': cpu_pct, 'active_jobs': active, 'cores': os.cpu_count() or 1})
+
+def clean_filename(name):
+    name = os.path.splitext(name)[0]
+    name = re.sub(r'[\.\-_]', ' ', name)
+    name = re.sub(r'(?i)(1080p|720p|2160p|4k|bluray|brrip|webrip|web dl|x264|x265|hevc|aac|ac3|dts|remux|repack|proper|eztv|rarbg|yts|yify|\[.*?\]|\(.*?\))', '', name)
+    name = re.sub(r'\b[sS]\d{2}[eE]\d{2}\b', '', name)
+    name = re.sub(r'\s+', ' ', name).strip()
+    return name
+
+@app.route('/api/poster')
+def api_poster():
+    q = request.args.get('q', '').strip()
+    if not q or not TMDB_API_KEY:
+        return jsonify({'poster': None})
+    try:
+        url = 'https://api.themoviedb.org/3/search/multi?api_key=' + TMDB_API_KEY + '&query=' + urllib.parse.quote(q) + '&page=1'
+        req = urllib.request.Request(url, headers={'User-Agent': 'MediaManager/1.0'})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read())
+        results = data.get('results', [])
+        if results:
+            poster_path = results[0].get('poster_path')
+            if poster_path:
+                return jsonify({'poster': 'https://image.tmdb.org/t/p/w92' + poster_path})
+        return jsonify({'poster': None})
+    except:
+        return jsonify({'poster': None})
 
 if __name__ == '__main__':
     print('Media Manager -> http://localhost:5000')

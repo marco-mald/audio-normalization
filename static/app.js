@@ -1,6 +1,37 @@
 var allFiles = [];
 var selected = {};
 
+function cleanName(name) {
+  name = name.replace(/\.[^.]+$/, '');
+  name = name.replace(/[\.\-_]/g, ' ');
+  name = name.replace(/(?:1080p|720p|2160p|4k|bluray|brrip|webrip|web dl|x264|x265|hevc|aac|ac3|dts|remux|repack|proper|eztv|rarbg|yts|yify|\[.*?\]|\(.*?\))/gi, '');
+  name = name.replace(/\b[sS]\d{2}[eE]\d{2}\b/, '');
+  return name.replace(/\s+/g, ' ').trim();
+}
+
+function getPoster(name, fid) {
+  var key = 'poster_' + fid;
+  var cached = sessionStorage.getItem(key);
+  if (cached !== null) {
+    if (cached) {
+      var img = document.getElementById('thumb-' + fid);
+      if (img) img.src = cached;
+    }
+    return;
+  }
+  var q = cleanName(name);
+  fetch('/api/poster?q=' + encodeURIComponent(q))
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      sessionStorage.setItem(key, data.poster || '');
+      if (data.poster) {
+        var img = document.getElementById('thumb-' + fid);
+        if (img) img.src = data.poster;
+      }
+    })
+    .catch(function() { sessionStorage.setItem(key, ''); });
+}
+
 if ('Notification' in window && Notification.permission === 'default') {
   Notification.requestPermission();
 }
@@ -203,6 +234,7 @@ function renderFiles(files) {
       '<div class="file-header" onclick="togglePanel(\'' + f.id + '\')">' +
         '<input type="checkbox" class="cb" id="cb-' + f.id + '" ' + (isSelected ? 'checked' : '') +
           ' onclick="toggleSelect(\'' + f.id + '\', event)" style="margin-right:4px;cursor:pointer">' +
+        '<img id="thumb-' + f.id + '" class="thumb" src="" alt="">' +
         '<div style="flex:1;min-width:0">' +
           '<div class="file-name">' + f.name + '</div>' +
           '<div class="file-path">' + f.path + '</div>' +
@@ -224,6 +256,9 @@ function renderFiles(files) {
     '</div>';
   }
   grid.innerHTML = html;
+  for (var k = 0; k < files.length; k++) {
+    getPoster(files[k].name, files[k].id);
+  }
 }
 
 function togglePanel(id) {
