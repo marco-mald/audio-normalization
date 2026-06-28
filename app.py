@@ -6,6 +6,10 @@ app = Flask(__name__, static_folder='static')
 
 MEDIA_DIR = "/mnt/ADATA"
 TMDB_API_KEY = os.environ.get('TMDB_API_KEY', '')
+RADARR_URL = os.environ.get('RADARR_URL', 'http://localhost:7878')
+RADARR_API_KEY = os.environ.get('RADARR_API_KEY', '')
+SONARR_URL = os.environ.get('SONARR_URL', 'http://localhost:8989')
+SONARR_API_KEY = os.environ.get('SONARR_API_KEY', '')
 FFPROBE = "/usr/lib/jellyfin-ffmpeg/ffprobe"
 FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
 
@@ -85,6 +89,44 @@ def scan_library_async():
         scan_status['running'] = False
         scan_status['done'] = True
 
+def trigger_rescan(filepath):
+    try:
+        folder = os.path.dirname(filepath)
+        if '/peliculas/' in filepath and RADARR_API_KEY:
+            url = RADARR_URL + '/api/v3/movie'
+            req = urllib.request.Request(url, headers={'X-Api-Key': RADARR_API_KEY})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                movies = json.loads(resp.read())
+            movie_id = None
+            for m in movies:
+                if folder.startswith(m.get('path', '')):
+                    movie_id = m['id']
+                    break
+            if movie_id:
+                cmd_url = RADARR_URL + '/api/v3/command'
+                body = json.dumps({'name': 'RescanMovie', 'movieId': movie_id}).encode()
+                req = urllib.request.Request(cmd_url, data=body, headers={
+                    'X-Api-Key': RADARR_API_KEY, 'Content-Type': 'application/json'})
+                urllib.request.urlopen(req, timeout=10)
+        elif '/series/' in filepath and SONARR_API_KEY:
+            url = SONARR_URL + '/api/v3/series'
+            req = urllib.request.Request(url, headers={'X-Api-Key': SONARR_API_KEY})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                series = json.loads(resp.read())
+            series_id = None
+            for s in series:
+                if folder.startswith(s.get('path', '')):
+                    series_id = s['id']
+                    break
+            if series_id:
+                cmd_url = SONARR_URL + '/api/v3/command'
+                body = json.dumps({'name': 'RescanSeries', 'seriesId': series_id}).encode()
+                req = urllib.request.Request(cmd_url, data=body, headers={
+                    'X-Api-Key': SONARR_API_KEY, 'Content-Type': 'application/json'})
+                urllib.request.urlopen(req, timeout=10)
+    except:
+        pass
+
 def cleanup_old_jobs():
     cutoff = time.time() - 600
     for k in list(jobs.keys()):
@@ -162,6 +204,7 @@ def normalize_file(filepath, tracks, job_id, surround_indices=None):
                 log.append('OK: Converted to MKV')
             else:
                 log.append('OK: Updated ' + name)
+            trigger_rescan(output)
     except Exception as e:
         log.append('ERROR: ' + str(e))
     finally:
@@ -249,10 +292,10 @@ def api_set_default():
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if r.returncode == 0:
-            # Refresh cache
             new_tracks, new_height = get_file_info(filepath)
             f['tracks'] = new_tracks
             f['status'] = classify(new_tracks, new_height)
+            trigger_rescan(filepath)
             return jsonify({'ok': True})
         else:
             return jsonify({'ok': False, 'error': r.stderr or r.stdout})
@@ -312,6 +355,7 @@ def delete_track_job(filepath, remaining, job_id, fid):
                 new_tracks, new_height = get_file_info(filepath)
                 f['tracks'] = new_tracks
                 f['status'] = classify(new_tracks, new_height)
+            trigger_rescan(filepath)
             log.append('OK: Track deleted')
     except Exception as e:
         log.append('ERROR: ' + str(e))
