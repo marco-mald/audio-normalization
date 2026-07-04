@@ -36,6 +36,7 @@ select{background:#111;border:1px solid #222;color:#888;padding:5px 8px;border-r
 .twarn{background:#1a150a;border-color:#3a2a1a;color:#8a6a3a}
 .terr{background:#1a0d0d;border-color:#3a1a1a;color:#8a3a3a}
 .tskip{color:#333;border-color:#1a1a1a}
+.tvid{background:#150d1a;border-color:#2a1a3a;color:#7a5a9a}
 .panel{border-top:1px solid #1a1a1a;padding:10px 12px;display:none}
 .panel.open{display:block}
 .track-list{display:flex;flex-direction:column;gap:3px;margin-bottom:8px}
@@ -51,8 +52,6 @@ select{background:#111;border:1px solid #222;color:#888;padding:5px 8px;border-r
 .log.open{display:block}
 .lok{color:#4a8a4a}
 .lerr{color:#8a3a3a}
-.thumb{width:32px;height:46px;object-fit:cover;border-radius:3px;background:#1a1a1a;flex-shrink:0}
-.thumb[src=""]{display:none}
 .loading{color:#333;font-size:12px;padding:32px;text-align:center}
 .progress-wrap{display:flex;align-items:center;gap:6px}
 .progress-bar{width:80px;height:4px;background:#1a1a1a;border-radius:2px;overflow:hidden}
@@ -129,6 +128,7 @@ input[type=checkbox]{accent-color:#4a6a9a;width:13px;height:13px}
     <option value="no-aac">Missing AAC 2.0</option>
     <option value="needs-fix">AAC not default</option>
     <option value="ok">OK</option>
+    <option value="needs-video">Needs H.264 encode</option>
     <option value="4k">4K skipped</option>
   </select>
   <button class="btn btn-orange btn-sm" onclick="doNormalizeAll()">Normalize all issues</button>

@@ -10,8 +10,15 @@ RADARR_URL = os.environ.get('RADARR_URL', 'http://localhost:7878')
 RADARR_API_KEY = os.environ.get('RADARR_API_KEY', '')
 SONARR_URL = os.environ.get('SONARR_URL', 'http://localhost:8989')
 SONARR_API_KEY = os.environ.get('SONARR_API_KEY', '')
+JELLYFIN_URL = os.environ.get('JELLYFIN_URL', 'http://localhost:8096')
+JELLYFIN_API_KEY = os.environ.get('JELLYFIN_API_KEY', '')
 FFPROBE = "/usr/lib/jellyfin-ffmpeg/ffprobe"
 FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
+
+def container_path_to_host(path):
+    if path.startswith('/data/'):
+        return os.path.join(MEDIA_DIR, path[len('/data/'):])
+    return path
 
 jobs = {}
 library_cache = []
@@ -30,9 +37,15 @@ def get_file_info(filepath):
         streams = data.get('streams', [])
         audio = []
         height = 0
+        video = {}
         for s in streams:
-            if s.get('codec_type') == 'video' and not height:
+            if s.get('codec_type') == 'video' and not video:
                 height = s.get('height', 0)
+                video = {
+                    'codec': s.get('codec_name', ''),
+                    'pix_fmt': s.get('pix_fmt', ''),
+                    'profile': s.get('profile', ''),
+                }
             if s.get('codec_type') == 'audio':
                 audio.append({
                     'index': s.get('index'),
@@ -42,12 +55,16 @@ def get_file_info(filepath):
                     'title': s.get('tags', {}).get('title', ''),
                     'is_default': bool(s.get('disposition', {}).get('default', 0))
                 })
-        return audio, height
+        return audio, height, video
     except:
-        return [], 0
+        return [], 0, {}
 
-def classify(tracks, height):
+def classify(tracks, height, video=None):
     if height >= 1440: return '4k'
+    if video:
+        codec = video.get('codec', '')
+        if codec and (codec != 'h264' or '10' in (video.get('pix_fmt') or '')):
+            return 'needs-video'
     if not tracks: return 'error'
     defaults = [t for t in tracks if t['is_default']]
     if not defaults:
@@ -71,14 +88,15 @@ def scan_library_async():
         for i, fp in enumerate(all_paths):
             scan_status['current'] = i
             scan_status['last_file'] = os.path.basename(fp)
-            tracks, height = get_file_info(fp)
+            tracks, height, video = get_file_info(fp)
             results.append({
                 'id': str(i),
                 'name': os.path.basename(fp),
                 'path': os.path.dirname(fp).replace(MEDIA_DIR, ''),
                 'filepath': fp,
                 'tracks': tracks,
-                'status': classify(tracks, height)
+                'video': video,
+                'status': classify(tracks, height, video)
             })
         scan_status['current'] = len(all_paths)
         with cache_lock:
@@ -88,6 +106,17 @@ def scan_library_async():
     finally:
         scan_status['running'] = False
         scan_status['done'] = True
+
+def trigger_jellyfin_refresh(folder):
+    if not JELLYFIN_API_KEY:
+        return
+    try:
+        body = json.dumps({'Updates': [{'Path': folder, 'UpdateType': 'Modified'}]}).encode()
+        req = urllib.request.Request(JELLYFIN_URL + '/Library/Media/Updated', data=body, method='POST',
+            headers={'X-Emby-Token': JELLYFIN_API_KEY, 'Content-Type': 'application/json'})
+        urllib.request.urlopen(req, timeout=10)
+    except:
+        pass
 
 def trigger_rescan(filepath):
     try:
@@ -126,6 +155,7 @@ def trigger_rescan(filepath):
                 urllib.request.urlopen(req, timeout=10)
     except:
         pass
+    trigger_jellyfin_refresh(folder)
 
 def cleanup_old_jobs():
     cutoff = time.time() - 600
@@ -133,7 +163,7 @@ def cleanup_old_jobs():
         if jobs[k].get('done') and jobs[k].get('completed_at', 0) < cutoff:
             del jobs[k]
 
-def normalize_file(filepath, tracks, job_id, surround_indices=None):
+def normalize_file(filepath, tracks, job_id, surround_indices=None, video=None):
     log = jobs[job_id]['log']
     try:
         name = os.path.basename(filepath)
@@ -149,25 +179,43 @@ def normalize_file(filepath, tracks, job_id, surround_indices=None):
         except:
             jobs[job_id]['total_duration'] = 0
 
+        needs_encode = bool(video) and (video.get('codec') != 'h264' or '10' in (video.get('pix_fmt') or ''))
+        default_track = next((t for t in tracks if t.get('is_default')), tracks[0] if tracks else None)
+        audio_ok = (default_track and default_track.get('codec') == 'aac'
+                    and default_track.get('channels', 0) <= 2)
+
         log.append('Processing: ' + name)
-        if surround_indices is not None:
-            surrounds = [t for t in tracks if t['index'] in surround_indices] or tracks[:1]
+        if needs_encode:
+            src = video.get('codec', '?').upper()
+            log.append('Video: %s → H.264 CRF18 (slow preset, can take 30-90 min)' % src)
+
+        cmd = [FFMPEG, '-i', filepath, '-map', '0:v']
+        if needs_encode:
+            cmd += ['-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
+                    '-profile:v', 'high', '-level:v', '4.1', '-pix_fmt', 'yuv420p']
         else:
-            surrounds = [t for t in tracks if t['channels'] >= 6] or tracks[:1]
-        cmd = [FFMPEG, '-i', filepath, '-map', '0:v', '-c:v', 'copy']
-        for i, surr in enumerate(surrounds):
-            ai = str(i)
-            cmd += ['-map', '0:' + str(surr['index']),
-                    '-c:a:' + ai, 'aac', '-ac:a:' + ai, '2', '-b:a:' + ai, '192k',
-                    '-disposition:a:' + ai, 'default' if i == 0 else '0']
-            lang = surr.get('lang', 'und')
-            if lang and lang != 'und':
-                cmd += ['-metadata:s:a:' + ai, 'language=' + lang,
-                        '-metadata:s:a:' + ai, 'title=AAC 2.0 ' + lang.upper()]
-        n_aac = len(surrounds)
-        for i, t in enumerate(tracks):
-            ai = str(n_aac + i)
-            cmd += ['-map', '0:' + str(t['index']), '-c:a:' + ai, 'copy', '-disposition:a:' + ai, '0']
+            cmd += ['-c:v', 'copy']
+
+        if needs_encode and audio_ok and surround_indices is None:
+            cmd += ['-map', '0:a', '-c:a', 'copy']
+        else:
+            if surround_indices is not None:
+                surrounds = [t for t in tracks if t['index'] in surround_indices] or tracks[:1]
+            else:
+                surrounds = [t for t in tracks if t['channels'] >= 6] or tracks[:1]
+            for i, surr in enumerate(surrounds):
+                ai = str(i)
+                cmd += ['-map', '0:' + str(surr['index']),
+                        '-c:a:' + ai, 'aac', '-ac:a:' + ai, '2', '-b:a:' + ai, '192k',
+                        '-disposition:a:' + ai, 'default' if i == 0 else '0']
+                lang = surr.get('lang', 'und')
+                if lang and lang != 'und':
+                    cmd += ['-metadata:s:a:' + ai, 'language=' + lang,
+                            '-metadata:s:a:' + ai, 'title=AAC 2.0 ' + lang.upper()]
+            n_aac = len(surrounds)
+            for i, t in enumerate(tracks):
+                ai = str(n_aac + i)
+                cmd += ['-map', '0:' + str(t['index']), '-c:a:' + ai, 'copy', '-disposition:a:' + ai, '0']
         cmd += ['-sn', '-metadata', 'title=' + os.path.splitext(name)[0], temp, '-y']
         log.append('Running ffmpeg...')
 
@@ -236,10 +284,49 @@ def api_scan_status():
 def api_file(fid):
     f = next((x for x in library_cache if x['id'] == fid), None)
     if not f: return jsonify({'error': 'not found'}), 404
-    t, h = get_file_info(f['filepath'])
+    t, h, v = get_file_info(f['filepath'])
     f['tracks'] = t
-    f['status'] = classify(t, h)
+    f['video'] = v
+    f['status'] = classify(t, h, v)
     return jsonify(f)
+
+# Auto-normalize on download is disabled: inline encodes (30-90 min for
+# needs-video) delayed the Jellyfin refresh, so availability notifications
+# arrived hours late or never. Now the webhook only tells Jellyfin about the
+# new file right away; the night optimizer (marcobot, 01:00-08:00) drains the
+# normalization backlog instead.
+def process_new_file(host_path):
+    print('[webhook] triggered for:', host_path, flush=True)
+    if not os.path.isfile(host_path):
+        print('[webhook] skip (file not found on host):', host_path, flush=True)
+        return
+    tracks, height, video = get_file_info(host_path)
+    status = classify(tracks, height, video)
+    print('[webhook] classify ->', status, 'for', os.path.basename(host_path),
+          '(normalize deferred to night optimizer)', flush=True)
+    trigger_jellyfin_refresh(os.path.dirname(host_path))
+
+@app.route('/api/webhook/radarr', methods=['POST'])
+def webhook_radarr():
+    data = request.json or {}
+    if data.get('eventType') != 'Download':
+        return jsonify({'ok': True})
+    path = data.get('movieFile', {}).get('path')
+    if not path:
+        return jsonify({'ok': True})
+    threading.Thread(target=process_new_file, args=(container_path_to_host(path),), daemon=True).start()
+    return jsonify({'ok': True})
+
+@app.route('/api/webhook/sonarr', methods=['POST'])
+def webhook_sonarr():
+    data = request.json or {}
+    if data.get('eventType') != 'Download':
+        return jsonify({'ok': True})
+    path = data.get('episodeFile', {}).get('path')
+    if not path:
+        return jsonify({'ok': True})
+    threading.Thread(target=process_new_file, args=(container_path_to_host(path),), daemon=True).start()
+    return jsonify({'ok': True})
 
 @app.route('/api/normalize', methods=['POST'])
 def api_normalize():
@@ -256,7 +343,7 @@ def api_normalize():
     jid = 'job_' + fid + '_' + str(len(jobs))
     jobs[jid] = {'log': [], 'done': False}
     threading.Thread(target=normalize_file, args=(f['filepath'], f['tracks'], jid),
-                     kwargs={'surround_indices': surround_indices}, daemon=True).start()
+                     kwargs={'surround_indices': surround_indices, 'video': f.get('video')}, daemon=True).start()
     return jsonify({'job_id': jid})
 
 @app.route('/api/job/<jid>')
@@ -280,7 +367,7 @@ def api_set_default():
     if ext == '.mp4':
         return jsonify({'ok': False, 'error': 'MP4 not supported, normalize first to convert to MKV'})
     
-    tracks, _ = get_file_info(filepath)
+    tracks, _, _v = get_file_info(filepath)
     cmd = ['mkvpropedit', filepath]
     for i, t in enumerate(tracks):
         track_sel = 'track:a' + str(i + 1)
@@ -292,9 +379,10 @@ def api_set_default():
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if r.returncode == 0:
-            new_tracks, new_height = get_file_info(filepath)
+            new_tracks, new_height, new_video = get_file_info(filepath)
             f['tracks'] = new_tracks
-            f['status'] = classify(new_tracks, new_height)
+            f['video'] = new_video
+            f['status'] = classify(new_tracks, new_height, new_video)
             trigger_rescan(filepath)
             return jsonify({'ok': True})
         else:
@@ -352,9 +440,10 @@ def delete_track_job(filepath, remaining, job_id, fid):
             os.rename(temp, filepath)
             f = next((x for x in library_cache if x['id'] == fid), None)
             if f:
-                new_tracks, new_height = get_file_info(filepath)
+                new_tracks, new_height, new_video = get_file_info(filepath)
                 f['tracks'] = new_tracks
-                f['status'] = classify(new_tracks, new_height)
+                f['video'] = new_video
+                f['status'] = classify(new_tracks, new_height, new_video)
             trigger_rescan(filepath)
             log.append('OK: Track deleted')
     except Exception as e:
@@ -376,7 +465,7 @@ def api_delete_track():
     filepath = f['filepath']
     if os.path.splitext(filepath)[1].lower() == '.mp4':
         return jsonify({'error': 'MP4 not supported, normalize first'})
-    tracks, _ = get_file_info(filepath)
+    tracks, _, _v = get_file_info(filepath)
     remaining = [t for t in tracks if t['index'] != track_index]
     if not remaining:
         return jsonify({'error': 'Cannot delete the only audio track'})
@@ -431,43 +520,6 @@ def clean_filename(name):
     name = re.sub(r'\s+', ' ', name).strip()
     return name
 
-poster_cache = {}
-
-@app.route('/api/poster')
-def api_poster():
-    q = request.args.get('q', '').strip()
-    if not q or not TMDB_API_KEY:
-        return jsonify({'poster': None})
-    if q in poster_cache:
-        return jsonify({'poster': poster_cache[q]})
-    try:
-        url = 'https://api.themoviedb.org/3/search/multi?api_key=' + TMDB_API_KEY + '&query=' + urllib.parse.quote(q) + '&page=1'
-        req = urllib.request.Request(url, headers={'User-Agent': 'MediaManager/1.0'})
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read())
-        results = data.get('results', [])
-        if results:
-            poster_path = results[0].get('poster_path')
-            if poster_path:
-                poster_cache[q] = '/api/img/' + poster_path.lstrip('/')
-                return jsonify({'poster': poster_cache[q]})
-        poster_cache[q] = None
-        return jsonify({'poster': None})
-    except:
-        return jsonify({'poster': None})
-
-@app.route('/api/img/<path:path>')
-def api_img(path):
-    try:
-        url = 'https://image.tmdb.org/t/p/w185/' + path
-        req = urllib.request.Request(url, headers={'User-Agent': 'MediaManager/1.0'})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            img_data = resp.read()
-            content_type = resp.headers.get('Content-Type', 'image/jpeg')
-        from flask import Response
-        return Response(img_data, content_type=content_type, headers={'Cache-Control': 'public, max-age=604800'})
-    except:
-        return '', 404
 
 if __name__ == '__main__':
     print('Media Manager -> http://localhost:5000')

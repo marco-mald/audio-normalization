@@ -1,36 +1,6 @@
 var allFiles = [];
 var selected = {};
 
-function cleanName(name) {
-  name = name.replace(/\.[^.]+$/, '');
-  name = name.replace(/[\.\-_]/g, ' ');
-  name = name.replace(/(?:1080p|720p|2160p|4k|bluray|brrip|webrip|web dl|x264|x265|hevc|aac|ac3|dts|remux|repack|proper|eztv|rarbg|yts|yify|\[.*?\]|\(.*?\))/gi, '');
-  name = name.replace(/\b[sS]\d{2}[eE]\d{2}\b/, '');
-  return name.replace(/\s+/g, ' ').trim();
-}
-
-function getPoster(name, fid) {
-  var key = 'poster_' + fid;
-  var cached = sessionStorage.getItem(key);
-  if (cached !== null) {
-    if (cached) {
-      var img = document.getElementById('thumb-' + fid);
-      if (img) img.src = cached;
-    }
-    return;
-  }
-  var q = cleanName(name);
-  fetch('/api/poster?q=' + encodeURIComponent(q))
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      sessionStorage.setItem(key, data.poster || '');
-      if (data.poster) {
-        var img = document.getElementById('thumb-' + fid);
-        if (img) img.src = data.poster;
-      }
-    })
-    .catch(function() { sessionStorage.setItem(key, ''); });
-}
 
 if ('Notification' in window && Notification.permission === 'default') {
   Notification.requestPermission();
@@ -152,13 +122,15 @@ function updateStats() {
   var ok = allFiles.filter(function(f) { return f.status === 'ok'; }).length;
   var noAac = allFiles.filter(function(f) { return f.status === 'no-aac'; }).length;
   var fix = allFiles.filter(function(f) { return f.status === 'needs-fix'; }).length;
+  var needsV = allFiles.filter(function(f) { return f.status === 'needs-video'; }).length;
   var skip = allFiles.filter(function(f) { return f.status === '4k'; }).length;
   document.getElementById('b-total').textContent = allFiles.length + ' files';
-  document.getElementById('b-issues').textContent = (noAac + fix) + ' issues';
+  document.getElementById('b-issues').textContent = (noAac + fix + needsV) + ' issues';
   document.getElementById('stats').innerHTML =
     '<div class="stat"><span style="color:#4a8a4a">' + ok + '</span> OK</div>' +
     '<div class="stat"><span style="color:#8a6a3a">' + fix + '</span> AAC not default</div>' +
     '<div class="stat"><span style="color:#8a3a3a">' + noAac + '</span> missing AAC 2.0</div>' +
+    (needsV ? '<div class="stat"><span style="color:#7a5a9a">' + needsV + '</span> needs H.264</div>' : '') +
     '<div class="stat"><span style="color:#333">' + skip + '</span> 4K skipped</div>';
 }
 
@@ -177,6 +149,7 @@ function sbadge(s) {
   if (s === 'ok') return '<span class="tbadge tok">AAC default OK</span>';
   if (s === 'needs-fix') return '<span class="tbadge twarn">AAC not default</span>';
   if (s === 'no-aac') return '<span class="tbadge terr">No AAC 2.0</span>';
+  if (s === 'needs-video') return '<span class="tbadge tvid">H.264 needed</span>';
   return '<span class="tbadge tskip">4K skip</span>';
 }
 
@@ -259,7 +232,6 @@ function renderFiles(files) {
       '<div class="file-header" onclick="togglePanel(\'' + f.id + '\')">' +
         '<input type="checkbox" class="cb" id="cb-' + f.id + '" ' + (isSelected ? 'checked' : '') +
           ' onclick="toggleSelect(\'' + f.id + '\', event)" style="margin-right:4px;cursor:pointer">' +
-        '<img id="thumb-' + f.id + '" class="thumb" src="" alt="">' +
         '<div style="flex:1;min-width:0">' +
           '<div class="file-name">' + f.name + '</div>' +
           '<div class="file-path">' + f.path + '</div>' +
@@ -281,9 +253,6 @@ function renderFiles(files) {
     '</div>';
   }
   grid.innerHTML = html;
-  for (var k = 0; k < files.length; k++) {
-    getPoster(files[k].name, files[k].id);
-  }
 }
 
 function togglePanel(id) {
@@ -617,7 +586,7 @@ function _drawCpu(pct, activeJobs, cores) {
 })();
 
 function doNormalizeAll() {
-  var toFix = allFiles.filter(function(f) { return f.status === 'no-aac' || f.status === 'needs-fix'; });
+  var toFix = allFiles.filter(function(f) { return f.status === 'no-aac' || f.status === 'needs-fix' || f.status === 'needs-video'; });
   if (!toFix.length) { alert('Nothing to fix!'); return; }
   if (!confirm('Normalize ' + toFix.length + ' files?')) return;
   var total = toFix.length;
