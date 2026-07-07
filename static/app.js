@@ -517,7 +517,7 @@ function doRefresh(fid) {
 
 var _cpuHistory = [];
 
-function _drawCpu(pct, activeJobs, cores) {
+function _drawCpu(pct, activeJobs, cores, activeNames) {
   var color = pct < 50 ? '#4a8a4a' : pct < 80 ? '#9a7a3a' : '#8a3a3a';
   var fillRgba = pct < 50 ? 'rgba(74,138,74,0.1)' : pct < 80 ? 'rgba(154,122,58,0.1)' : 'rgba(138,58,58,0.1)';
   var el = document.getElementById('cpu-pct');
@@ -526,6 +526,11 @@ function _drawCpu(pct, activeJobs, cores) {
   if (jel) jel.textContent = activeJobs + (activeJobs === 1 ? ' job' : ' jobs');
   var cel = document.getElementById('cpu-cores');
   if (cel && cores) cel.textContent = cores + ' cores';
+  var nel = document.getElementById('cpu-current');
+  if (nel) {
+    nel.textContent = (activeNames && activeNames.length) ? activeNames.join(' · ') : '';
+    nel.title = nel.textContent;
+  }
 
   var canvas = document.getElementById('cpu-canvas');
   if (!canvas) return;
@@ -579,7 +584,7 @@ function _drawCpu(pct, activeJobs, cores) {
       .then(function(d) {
         _cpuHistory.push(d.cpu);
         if (_cpuHistory.length > 60) _cpuHistory.shift();
-        _drawCpu(d.cpu, d.active_jobs, d.cores);
+        _drawCpu(d.cpu, d.active_jobs, d.cores, d.active_names);
       })
       .catch(function() {});
   }, 1000);

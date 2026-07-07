@@ -14,6 +14,13 @@ JELLYFIN_URL = os.environ.get('JELLYFIN_URL', 'http://localhost:8096')
 JELLYFIN_API_KEY = os.environ.get('JELLYFIN_API_KEY', '')
 FFPROBE = "/usr/lib/jellyfin-ffmpeg/ffprobe"
 FFMPEG = "/usr/lib/jellyfin-ffmpeg/ffmpeg"
+QSV_DEVICE = "/dev/dri/renderD128"
+MAX_CONCURRENT_JOBS = int(os.environ.get('MAX_CONCURRENT_JOBS', '2'))
+encode_slots = threading.Semaphore(MAX_CONCURRENT_JOBS)
+
+def qsv_available():
+    # needs the app user in the 'render' group to open the GPU device
+    return os.environ.get('USE_QSV', '1') != '0' and os.access(QSV_DEVICE, os.R_OK | os.W_OK)
 
 def container_path_to_host(path):
     if path.startswith('/data/'):
@@ -163,8 +170,32 @@ def cleanup_old_jobs():
         if jobs[k].get('done') and jobs[k].get('completed_at', 0) < cutoff:
             del jobs[k]
 
+def run_ffmpeg(cmd, job_id, log):
+    proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, bufsize=0)
+    jobs[job_id]['proc'] = proc
+    buf = b''
+    while True:
+        chunk = proc.stderr.read(512)
+        if not chunk:
+            break
+        buf += chunk
+        parts = buf.replace(b'\r', b'\n').split(b'\n')
+        buf = parts[-1]
+        for part in parts[:-1]:
+            line = part.decode('utf-8', errors='replace').strip()
+            if line:
+                log.append(line)
+                if len(log) > 40:
+                    del log[2]
+    proc.wait()
+    return proc.returncode
+
 def normalize_file(filepath, tracks, job_id, surround_indices=None, video=None):
     log = jobs[job_id]['log']
+    got_slot = encode_slots.acquire(blocking=False)
+    if not got_slot:
+        log.append('Queued: waiting for a free encode slot (max %d concurrent)...' % MAX_CONCURRENT_JOBS)
+        encode_slots.acquire()
     try:
         name = os.path.basename(filepath)
         ext = os.path.splitext(filepath)[1].lower()
@@ -184,18 +215,25 @@ def normalize_file(filepath, tracks, job_id, surround_indices=None, video=None):
         audio_ok = (default_track and default_track.get('codec') == 'aac'
                     and default_track.get('channels', 0) <= 2)
 
+        use_qsv = needs_encode and qsv_available()
         log.append('Processing: ' + name)
         if needs_encode:
             src = video.get('codec', '?').upper()
-            log.append('Video: %s → H.264 CRF18 (slow preset, can take 30-90 min)' % src)
+            if use_qsv:
+                log.append('Video: %s → H.264 ICQ18 (QuickSync hardware encode)' % src)
+            else:
+                log.append('Video: %s → H.264 CRF18 (slow preset, can take 30-90 min)' % src)
 
-        cmd = [FFMPEG, '-i', filepath, '-map', '0:v']
-        if needs_encode:
-            cmd += ['-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
+        def video_args(qsv):
+            if not needs_encode:
+                return ['-c:v', 'copy']
+            if qsv:
+                return ['-c:v', 'h264_qsv', '-preset', 'slower', '-global_quality', '18',
+                        '-profile:v', 'high', '-level:v', '4.1', '-vf', 'format=nv12']
+            return ['-c:v', 'libx264', '-preset', 'slow', '-crf', '18',
                     '-profile:v', 'high', '-level:v', '4.1', '-pix_fmt', 'yuv420p']
-        else:
-            cmd += ['-c:v', 'copy']
 
+        cmd = []
         if needs_encode and audio_ok and surround_indices is None:
             cmd += ['-map', '0:a', '-c:a', 'copy']
         else:
@@ -219,28 +257,16 @@ def normalize_file(filepath, tracks, job_id, surround_indices=None, video=None):
         cmd += ['-sn', '-metadata', 'title=' + os.path.splitext(name)[0], temp, '-y']
         log.append('Running ffmpeg...')
 
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, bufsize=0)
-        jobs[job_id]['proc'] = proc
-        buf = b''
-        while True:
-            chunk = proc.stderr.read(512)
-            if not chunk:
-                break
-            buf += chunk
-            parts = buf.replace(b'\r', b'\n').split(b'\n')
-            buf = parts[-1]
-            for part in parts[:-1]:
-                line = part.decode('utf-8', errors='replace').strip()
-                if line:
-                    log.append(line)
-                    if len(log) > 40:
-                        del log[2]
-        proc.wait()
-
-        if proc.returncode not in (0, -15):
-            log.append('ERROR: ffmpeg rc=' + str(proc.returncode))
+        rc = run_ffmpeg([FFMPEG, '-i', filepath, '-map', '0:v'] + video_args(use_qsv) + cmd, job_id, log)
+        if use_qsv and rc not in (0, -15):
+            log.append('QSV encode failed (rc=%s), retrying with libx264 (software, slower)...' % rc)
             if os.path.exists(temp): os.remove(temp)
-        elif proc.returncode == -15:
+            rc = run_ffmpeg([FFMPEG, '-i', filepath, '-map', '0:v'] + video_args(False) + cmd, job_id, log)
+
+        if rc not in (0, -15):
+            log.append('ERROR: ffmpeg rc=' + str(rc))
+            if os.path.exists(temp): os.remove(temp)
+        elif rc == -15:
             if os.path.exists(temp): os.remove(temp)
         elif not os.path.exists(temp) or os.path.getsize(temp) < 1024*1024:
             log.append('ERROR: output invalid')
@@ -253,9 +279,21 @@ def normalize_file(filepath, tracks, job_id, surround_indices=None, video=None):
             else:
                 log.append('OK: Updated ' + name)
             trigger_rescan(output)
+            # Refresh this file's cache entry: otherwise reports keep listing
+            # it as pending and a re-run would re-encode the finished file.
+            new_tracks, new_height, new_video = get_file_info(output)
+            with cache_lock:
+                entry = next((x for x in library_cache if x['filepath'] == filepath), None)
+                if entry:
+                    entry['filepath'] = output
+                    entry['name'] = os.path.basename(output)
+                    entry['tracks'] = new_tracks
+                    entry['video'] = new_video
+                    entry['status'] = classify(new_tracks, new_height, new_video)
     except Exception as e:
         log.append('ERROR: ' + str(e))
     finally:
+        encode_slots.release()
         jobs[job_id]['done'] = True
         jobs[job_id]['completed_at'] = time.time()
         with active_paths_lock:
@@ -334,6 +372,8 @@ def api_normalize():
     fid = data.get('file_id')
     f = next((x for x in library_cache if x['id'] == fid), None)
     if not f: return jsonify({'error': 'not found'}), 404
+    if f['status'] == 'ok':
+        return jsonify({'error': 'file already normalized (status ok) — nothing to do'}), 409
     with active_paths_lock:
         if f['filepath'] in active_paths:
             return jsonify({'error': 'already processing this file'}), 409
@@ -341,7 +381,7 @@ def api_normalize():
     cleanup_old_jobs()
     surround_indices = data.get('surround_indices')
     jid = 'job_' + fid + '_' + str(len(jobs))
-    jobs[jid] = {'log': [], 'done': False}
+    jobs[jid] = {'log': [], 'done': False, 'name': os.path.basename(f['filepath'])}
     threading.Thread(target=normalize_file, args=(f['filepath'], f['tracks'], jid),
                      kwargs={'surround_indices': surround_indices, 'video': f.get('video')}, daemon=True).start()
     return jsonify({'job_id': jid})
@@ -410,28 +450,12 @@ def delete_track_job(filepath, remaining, job_id, fid):
         cmd += ['-sn', temp, '-y']
         log.append('Remuxing...')
 
-        proc = subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, bufsize=0)
-        jobs[job_id]['proc'] = proc
-        buf = b''
-        while True:
-            chunk = proc.stderr.read(512)
-            if not chunk:
-                break
-            buf += chunk
-            parts = buf.replace(b'\r', b'\n').split(b'\n')
-            buf = parts[-1]
-            for part in parts[:-1]:
-                line = part.decode('utf-8', errors='replace').strip()
-                if line:
-                    log.append(line)
-                    if len(log) > 40:
-                        del log[2]
-        proc.wait()
+        rc = run_ffmpeg(cmd, job_id, log)
 
-        if proc.returncode not in (0, -15):
-            log.append('ERROR: ffmpeg rc=' + str(proc.returncode))
+        if rc not in (0, -15):
+            log.append('ERROR: ffmpeg rc=' + str(rc))
             if os.path.exists(temp): os.remove(temp)
-        elif proc.returncode == -15:
+        elif rc == -15:
             if os.path.exists(temp): os.remove(temp)
         elif not os.path.exists(temp) or os.path.getsize(temp) < 1024*1024:
             log.append('ERROR: output invalid')
@@ -475,7 +499,7 @@ def api_delete_track():
         active_paths.add(filepath)
     cleanup_old_jobs()
     jid = 'del_' + fid + '_' + str(track_index) + '_' + str(len(jobs))
-    jobs[jid] = {'log': [], 'done': False, 'total_duration': 0}
+    jobs[jid] = {'log': [], 'done': False, 'total_duration': 0, 'name': os.path.basename(filepath)}
     threading.Thread(target=delete_track_job, args=(filepath, remaining, jid, fid), daemon=True).start()
     return jsonify({'job_id': jid})
 
@@ -509,8 +533,8 @@ def api_sysinfo():
             _cpu_state['prev'] = (total, idle)
     except:
         pass
-    active = sum(1 for j in jobs.values() if not j.get('done'))
-    return jsonify({'cpu': cpu_pct, 'active_jobs': active, 'cores': os.cpu_count() or 1})
+    active_names = [j.get('name', '?') for j in jobs.values() if not j.get('done')]
+    return jsonify({'cpu': cpu_pct, 'active_jobs': len(active_names), 'active_names': active_names, 'cores': os.cpu_count() or 1})
 
 def clean_filename(name):
     name = os.path.splitext(name)[0]
